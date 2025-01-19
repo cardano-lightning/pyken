@@ -3,6 +3,7 @@ from collections import namedtuple
 from dataclasses import make_dataclass
 from typing import Any
 import uplc.ast
+import uplc.tools
 import subprocess
 import sys
 
@@ -301,8 +302,9 @@ test_blueprint = (
 class BlueprintJSON(namedtuple('BlueprintJSON', ['name', 'parameters', 'definitions', 'compiled_code', 'hash'])):
     __slots__ = ()
 
-    def __new__(cls, module_name, function_name):
-        blueprint_json = json.loads(run_command(f"aiken export --module {module_name} --name {function_name}"))
+    def __new__(cls, module_name, function_name, aiken_project_directory=None):
+        project_directory = f"{aiken_project_directory}" if aiken_project_directory else ""
+        blueprint_json = json.loads(run_command(f"aiken export --module {module_name} --name {function_name} {project_directory}"))
         return cls.from_json(blueprint_json)
 
     @staticmethod
@@ -384,8 +386,8 @@ def make_modules(type_defs):
         curr_parent[type_name] = type_definition
     return make_module('blueprint', top_level, type_defs)
 
-def Blueprint(module_name, function_name, debug=True):
-    blueprint_json = BlueprintJSON(module_name, function_name)
+def Blueprint(module_name, function_name, aiken_project_directory=None, debug=True):
+    blueprint_json = BlueprintJSON(module_name, function_name, aiken_project_directory)
     top_level = make_modules(blueprint_json.definitions)
 
     # We want to add __call__ to the module so it is really a blueprint 
@@ -400,8 +402,13 @@ def Blueprint(module_name, function_name, debug=True):
             raise e
 
         args_str = ' '.join([f"'{p.to_uplc().dumps()}'" for p in terms])
-        result_uplc = json.loads(run_command(f"aiken uplc eval -c <(echo '{blueprint_json.compiled_code}') {args_str}"))['result']
-        return result_uplc
+        response = json.loads(run_command(f"aiken uplc eval -c <(echo '{blueprint_json.compiled_code}') {args_str}"))
+        Response = namedtuple('Response', ['result', 'cpu', 'mem'])
+
+        source = f"(program 0.0.0 {response['result']})"
+        program = uplc.tools.parse(source)
+        result = program.term.value
+        return Response(result, response['cpu'], response['mem'])
 
     # Let's copy everything from regular module and add __call__:
     attrs = [i for i in top_level.__annotations__.items()]
@@ -413,20 +420,19 @@ def Blueprint(module_name, function_name, debug=True):
     )
     return BlueprintModule(*[getattr(top_level, i[0]) for i in attrs])
 
-
-blueprint = Blueprint("cheque", "is_one")
-print(blueprint)
-print(blueprint(1))
-
-accept_bool_json = BlueprintJSON("cheque", "accept_bool")
-print(accept_bool_json.definitions)
-accept_bool = Blueprint("cheque", "accept_bool")
-print(accept_bool(False))
-print(accept_bool(True))
-
-hello_json = BlueprintJSON("hello", "greet")
-print(hello_json.definitions)
-
-blueprint = Blueprint("hello", "greet")
-print(blueprint(blueprint.hello.Entity.Person("paluh")))
-print(blueprint(blueprint.hello.Entity.Planet(blueprint.hello.Planet.Mercury)))
+# blueprint = Blueprint("cheque", "is_one")
+# print(blueprint)
+# print(blueprint(1))
+# 
+# accept_bool_json = BlueprintJSON("cheque", "accept_bool")
+# print(accept_bool_json.definitions)
+# accept_bool = Blueprint("cheque", "accept_bool")
+# print(accept_bool(False))
+# print(accept_bool(True))
+# 
+# hello_json = BlueprintJSON("hello", "greet")
+# print(hello_json.definitions)
+# 
+# blueprint = Blueprint("hello", "greet")
+# print(blueprint(blueprint.hello.Entity.Person("paluh")))
+# print(blueprint(blueprint.hello.Entity.Planet(blueprint.hello.Planet.Mercury)))

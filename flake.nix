@@ -30,34 +30,32 @@
         pkgs,
         system,
         ...
-      }:
-      let
+      }: let
         pkgs = import inputs.nixpkgs {
           inherit system;
           overlays = [
             (import inputs.rust-overlay)
-            (final: prev:
-              let
-                version = "1.3.3";
-              in {
-                python311Packages = prev.python311Packages.override {
-                  overrides = pyFinal: pyPrev: {
-                    frozenlist = pyPrev.frozenlist.overridePythonAttrs (old: {
-                      version = version;
-                      # Using the same approach as the original derivation:
-                      src = final.fetchFromGitHub {
-                        owner = "aio-libs";
-                        repo  = "frozenlist";
-                        tag   = "v${version}";
-                        # Replace with the sha you got from nix-prefetch-url
-                        hash  = "sha256-lJWRdXvuzyvJwNSpv0+ojY4rwws3jwDtlLOqYyLPrZc=";
-                      };
+            (final: prev: let
+              version = "1.3.3";
+            in {
+              python311Packages = prev.python311Packages.override {
+                overrides = pyFinal: pyPrev: {
+                  frozenlist = pyPrev.frozenlist.overridePythonAttrs (old: {
+                    version = version;
+                    # Using the same approach as the original derivation:
+                    src = final.fetchFromGitHub {
+                      owner = "aio-libs";
+                      repo = "frozenlist";
+                      tag = "v${version}";
+                      # Replace with the sha you got from nix-prefetch-url
+                      hash = "sha256-lJWRdXvuzyvJwNSpv0+ojY4rwws3jwDtlLOqYyLPrZc=";
+                    };
 
-                      # Optionally keep or remove the existing `postPatch` etc.
-                      # e.g. remove `rm pytest.ini` if 1.3.3 doesn't have it
-                    });
-                  };
+                    # Optionally keep or remove the existing `postPatch` etc.
+                    # e.g. remove `rm pytest.ini` if 1.3.3 doesn't have it
+                  });
                 };
+              };
             })
           ];
         };
@@ -143,18 +141,17 @@
           };
         };
 
-
-        devShells.default =
-          let
-            version = matrix.stable-default.version;
-            profile = matrix.stable-default.profile;
-            rustInfo = makeRustInfo {
-              inherit version profile;
-            };
-            lib-path = pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-            ];
-          in pkgs.mkShell {
+        devShells.default = let
+          version = matrix.stable-default.version;
+          profile = matrix.stable-default.profile;
+          rustInfo = makeRustInfo {
+            inherit version profile;
+          };
+          lib-path = pkgs.lib.makeLibraryPath [
+            pkgs.openssl
+          ];
+        in
+          pkgs.mkShell {
             RUST_SRC_PATH = rustInfo.path;
             buildInputs = rustInfo.drvs;
             nativeBuildInputs = [
@@ -167,12 +164,19 @@
 
               SOURCE_DATE_EPOCH=$(date +%s)
               export "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${lib-path}"
-              VENV=./aik/aiken_blueprint/.venv
+              VENV=.venv
+              if [ ! -d $VENV ]; then
+                python -m venv $VENV
+                source ./$VENV/bin/activate
+                pip install --upgrade pip
+                pip install -r requirements.txt
+              fi
               source ./$VENV/bin/activate
               export PYTHONPATH=`pwd`/$VENV/${pkgs.python311.sitePackages}/:$PYTHONPATH
             '';
             postShellHook = ''
-              ln -sf ${pkgs.python311.sitePackages}/* ./.venv/lib/python311.12/site-packages
+              mkdir -p $VENV/lib/python311.12/site-packages
+              ln -sf ${pkgs.python311.sitePackages}/* $VENV/lib/python311.12/site-packages
             '';
             name = "cardano-lightning";
             packages = [
