@@ -15,11 +15,16 @@ entity = blueprint.hello.Entity.Person("paluh")
 response = blueprint(entity)
 
 # Result contains the regular pieces from `aiken uplc eval` output.
-assert response.result == "Hello, paluh!", response.result
+assert response.result == "Hello, paluh!", f"Expected greeting from paluh but got {response.result}"
 
 # Some non parametric constructors are exposed as values directly.
 mercury = blueprint.hello.Planet.Mercury
 planet = blueprint.hello.Entity.Planet(mercury)
 
-# Even more values
-assert blueprint(planet).result == "Hello, Mercury!"
+
+response = blueprint(planet)
+assert response.result == "Hello, Mercury!", f"Expected greeting from Mercury but got '{response.result}'"
+
+# The response contains also mem and cpu usage.
+assert response.mem > 0, f"Expected non-zero memory usage but got {response.mem}"
+assert response.cpu > 0, f"Expected non-zero CPU usage but got {response.cpu}"
