@@ -1,11 +1,10 @@
 # pyken
 
-WIP: FFI into Aiken bluprints from Python with ease.
+WIP: FFI into Aiken blueprints from Python with ease.
 
 ## Example
 
-Here is our fancy `hello.ak` world example in Aiken which we want to call from
-Python:
+Here is our fancy `hello.ak` example in Aiken which we want to call from Python:
 
 ```aiken
 use aiken/builtin.{append_string}
@@ -52,44 +51,40 @@ Let's call that function from Python:
 ```python
 from pyken import Blueprint
 
-# We assume that this script is executed from the aiken project directory. You can also
-# provide the path to that directory as a parameter.
+# This script assumes execution from the Aiken project directory.
+# You can also provide the path to that directory as a parameter.
 blueprint = Blueprint("hello", "greet")
 
-# `blueprint` objects serves two purposes:
-# 1. It is a function which FFIs into a UPLC function
-#    exposed through Aiken blueprint.
-# 2. It is a namespace which contains all the types
+# `blueprint` object serves two purposes:
+# 1. It is an FFI to a UPLC function exposed through Aiken blueprint.
+# 2. It is a namespace which contains all the types (with constructors)
 #    defined in the blueprint and needed to call the function.
 entity = blueprint.hello.Entity.Person("paluh")
 
 response = blueprint(entity)
 
 # Result contains the regular pieces from `aiken uplc eval` output.
-assert response.result == "Hello, paluh!", f"Expected greeting from paluh but got {response.result}"
+assert response.result == "Hello, paluh!"
+assert response.mem > 0
+assert response.cpu > 0
 
-# Some non parametric constructors are exposed as values directly.
+# Some non-parametric constructors are exposed as values directly.
 mercury = blueprint.hello.Planet.Mercury
 planet = blueprint.hello.Entity.Planet(mercury)
 
 response = blueprint(planet)
-assert response.result == "Hello, Mercury!", f"Expected greeting from Mercury but got '{response.result}'"
-
-# The response contains also mem and cpu usage.
-assert response.mem > 0, f"Expected non-zero memory usage but got {response.mem}"
-assert response.cpu > 0, f"Expected non-zero CPU usage but got {response.cpu}"
+assert response.result == "Hello, Mercury!"
 ```
 
-Minor comment about the example above: it is not good idea to accept/work with
+Minor comment about the example above: it is not a good idea to accept/work with
 strings in Aiken/Plutus. Under the hood it requires a decoding pass between
 bytes and string.
 
 ## Usage
 
-This package depends on `aiken` being available in your PATH and currently can
-be called only from the project directory.
+This package depends on `aiken` being available in your PATH.
 
 ## Credits
 
-This is rather trivial script but it is build on top of great `opshin/uplc` lib
-and the Aiken itself of course.
+This is rather trivial script. It is built on top of the excellent `opshin/uplc`
+library and Aiken.
