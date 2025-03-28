@@ -88,3 +88,21 @@ This package depends on `aiken` being available in your PATH.
 
 This is rather trivial script. It is built on top of the excellent `opshin/uplc`
 library and Aiken.
+
+## Devel flow
+
+### Installation
+
+```shell
+$ nix develop # optional: provides `aiken` and `python3`
+$ python3 -m venv venv
+$ source venv/bin/activate
+$ pip install -e .
+$ pytest
+```
+
+### Testing
+
+```shell
+$ python tests/hello.py
+```
