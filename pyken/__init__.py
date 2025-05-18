@@ -25,12 +25,12 @@ def not_implemented_error(msg):
     raise NotImplementedError(msg)
 
 # Non parametric "well-known" types:
-AikenSimpleType = namedtuple('AikenSimpleType', ['name', 'random'])
-AikenBoolType = AikenSimpleType("Bool", lambda _type_refs: random.choice([True, False]))
-AikenByteArrayType = AikenSimpleType("ByteArray", lambda _type_refs: bytes(random.randint(0, 255) for _ in range(random.randint(0, 32))))
-AikenDataType = AikenSimpleType("Data", lambda _type_refs: not_implemented_error("Data type is not supported"))
-AikenIntType = AikenSimpleType("Integer", lambda _type_refs: random.randint(-1000000, 1000000))
-AikenStringType = AikenSimpleType("String", lambda _type_refs: ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(random.randint(0, 32))))
+AikenSimpleType = namedtuple('AikenSimpleType', ['name'])
+AikenBoolType = AikenSimpleType("Bool")
+AikenByteArrayType = AikenSimpleType("ByteArray")
+AikenDataType = AikenSimpleType("Data")
+AikenIntType = AikenSimpleType("Integer")
+AikenStringType = AikenSimpleType("String")
 
 # Parametric "well-known" types:
 class AikenListType(namedtuple('AikenListType', ['name', 'a'])):
@@ -39,43 +39,26 @@ class AikenListType(namedtuple('AikenListType', ['name', 'a'])):
         name = f"List<{t_ref}>"
         return super(AikenListType, cls).__new__(cls, name, t_ref)
 
-    def random(self, type_refs):
-        length = random.randint(0, 5)
-        return [type_refs[self.a].random() for _ in range(length)]
-
 class AikenPairType(namedtuple('AikenPairType', ['name', 'fst', 'snd'])):
     __slots__ = ()
     def __new__(cls, fst, snd):
         name = f"Pair<{fst.name}, {snd.name}>"
         return super(AikenPairType, cls).__new__(cls, name, fst, snd)
-    def random(self, type_refs):
-        return AikenPairValue(type_refs[self.fst].random(), type_refs[self.snd].random())
 
 class AikenTupleType(namedtuple('AikenTupleType', ['name', 'fields'])):
     __slots__ = ()
     def __new__(cls, fields):
         name = f"Tuple<{', '.join(t_ref for t_ref in fields)}>"
         return super(AikenTupleType, cls).__new__(cls, name, fields)
-    def random(self, type_refs):
-        return tuple(type_refs[field].random() for field in self.fields)
 
 # User defined types:
 AikenFieldType = namedtuple('AikenFieldType', ['name', 'type'])
 
 class AikenEnumConstructorType(namedtuple('AikenEnumConstructorType', ['name', 'index', 'fields'])):
-    def random(self, type_refs):
-        if len(self.fields) == 0:
-            return AikenEnumValue(self.index, [])
-        field_values = []
-        for field_type_ref in self.fields:
-            field_type = type_refs[field_type_ref]
-            field_values.append(field_type.random(type_refs))
-        return AikenEnumValue(self.index, field_values)
+    pass
 
 class AikenEnumType(namedtuple('AikenEnumType', ['name', 'constructors'])):
-    def random(self, type_refs):
-        constructor = random.choice(self.constructors)
-        return constructor.random(type_refs)
+    pass
 
 # Most Aiken values can be derived directly through casting
 # from Python values.
@@ -87,18 +70,39 @@ class AikenEnumType(namedtuple('AikenEnumType', ['name', 'constructors'])):
 # The only exception is the `AikenEnumValue` which is a bit
 # more complex and has to be handled separately.
 
-class AikenEnumValue(namedtuple('AikenEnumValue', ['index', 'fields'])):
-    def random(self, type_refs):
-        # This should never be called directly - enum values get their random
-        # generation from their constructors
-        raise NotImplementedError("Random generation should be handled by enum constructors")
+AikenEnumValue = namedtuple('AikenEnumValue', ['index', 'fields'])
+AikenPairValue = namedtuple('AikenPairValue', ['fst', 'snd'])
 
-class AikenPairValue(namedtuple('AikenPairValue', ['fst', 'snd'])):
-    def random(self, type_refs):
-        return AikenPairValue(
-            type_refs[self.fst].random(type_refs),
-            type_refs[self.snd].random(type_refs)
-        )
+def gen_random_value(aiken_type, type_refs):
+    if aiken_type == AikenBoolType:
+        return random.choice([True, False])
+    elif aiken_type == AikenByteArrayType:
+        length = random.randint(0, 32)
+        return bytes(random.randint(0, 255) for _ in range(length))
+    elif aiken_type == AikenIntType:
+        return random.randint(-1000000, 1000000)
+    elif aiken_type == AikenStringType:
+        length = random.randint(0, 32)
+        return ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+    elif isinstance(aiken_type, AikenListType):
+        length = random.randint(0, 5)
+        return [gen_random_value(type_refs[aiken_type.a], type_refs) for _ in range(length)]
+    elif isinstance(aiken_type, AikenTupleType):
+        return tuple(gen_random_value(type_refs[t], type_refs) for t in aiken_type.fields)
+    elif isinstance(aiken_type, AikenPairType):
+        fst = gen_random_value(type_refs[aiken_type.fst], type_refs)
+        snd = gen_random_value(type_refs[aiken_type.snd], type_refs)
+        return AikenPairValue(fst, snd)
+    elif isinstance(aiken_type, AikenEnumType):
+        constructor = random.choice(aiken_type.constructors)
+        if len(constructor.fields) == 0:
+            return AikenEnumValue(constructor.index, [])
+        field_values = []
+        for field_type_ref in constructor.fields:
+            field_type = type_refs[field_type_ref]
+            field_values.append(gen_random_value(field_type, type_refs))
+        return AikenEnumValue(constructor.index, field_values)
+    raise ValueError(f"Unknown type: {aiken_type}")
 
 class AikenTerm(namedtuple('AikenTerm', ['value', 'type', 'type_refs'])):
     @staticmethod
@@ -169,6 +173,11 @@ class AikenTerm(namedtuple('AikenTerm', ['value', 'type', 'type_refs'])):
             fields = [t.to_uplc() for t in self.value.fields]
             return uplc.ast.PlutusConstr(self.value.index, fields)
         raise ValueError(f"Unknown type: {self.type}")
+
+    # This transformation should be driven by the type.
+    # In the case of simple values we should output JSON directly.
+    # In he case of byte strings we should output hex.
+    # def to_json(self):
 
     def __repr__(self):
         return f"AikenTerm({self.value} :: {self.type})"
@@ -271,14 +280,13 @@ def make_enum_constructor_fn(enum_type, constructor, type_refs):
     # A constant
     if len(constructor.fields) == 0:
         value = AikenEnumValue(constructor.index, [])
-        value.random = lambda: value
         return value
 
     def constructor_fn(*args):
         return AikenEnumValue(constructor.index, args)
 
     constructor_fn.__name__ = constructor.name
-    constructor_fn.random = lambda: constructor.random(type_refs)
+    constructor_fn.random = lambda: gen_random_value(enum_type, type_refs)
     return constructor_fn
 
 def make_module(module_name, module_dict, type_refs):
@@ -296,7 +304,7 @@ def make_module(module_name, module_dict, type_refs):
                 attrs_annotations.append(('random', Any))
                 TypeModule = make_dataclass(name, attrs_annotations)
                 attrs = [make_enum_constructor_fn(module_attr, constructor, type_refs) for constructor in module_attr.constructors]
-                attrs.append(lambda module_attr=module_attr: module_attr.random(type_refs))
+                attrs.append(lambda module_attr=module_attr: gen_random_value(module_attr, type_refs))
                 type_module = TypeModule(*attrs)
                 values.append(type_module)
             elif module_attr == AikenIntType:
@@ -364,6 +372,7 @@ def Blueprint(module_name, function_name, aiken_project_directory=None, debug=Tr
         program = uplc.tools.parse(source)
         result = program.term.value
         return Response(result, response['cpu'], response['mem'])
+
     # Let's build annotations dynamically which can be attached
     # to the function. This is useful for the IDEs to provide
     # type hints.

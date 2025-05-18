@@ -84,10 +84,18 @@ bytes and string.
 
 This package depends on `aiken` being available in your PATH.
 
+## Extras
+
+This package provides some extra functionalities:
+
+- Generating random values. The fuzzer is really simple and not as flexible as
+  builtin Aiken one. The advantage of it is that you can actually use generated
+  values on both sides - in Python and in Aiken.
+
 ## Credits
 
-This is rather trivial script. It is built on top of the excellent `opshin/uplc`
-library and Aiken.
+This is a rather trivial script. It is built on top of the excellent
+`opshin/uplc` library and Aiken.
 
 ## Devel flow
 
