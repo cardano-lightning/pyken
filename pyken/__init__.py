@@ -2,6 +2,7 @@ import json
 from collections import namedtuple
 from dataclasses import make_dataclass
 from typing import Any
+import random
 import uplc.ast
 import uplc.tools
 import subprocess
@@ -20,6 +21,9 @@ def run_command(cmd, debug=True):
         sys.exit(1)
     return result.stdout
 
+def not_implemented_error(msg):
+    raise NotImplementedError(msg)
+
 # Non parametric "well-known" types:
 AikenSimpleType = namedtuple('AikenSimpleType', ['name'])
 AikenBoolType = AikenSimpleType("Bool")
@@ -31,14 +35,16 @@ AikenStringType = AikenSimpleType("String")
 # Parametric "well-known" types:
 class AikenListType(namedtuple('AikenListType', ['name', 'a'])):
     __slots__ = ()
-    def __new__(cls, t_ref):
+    def __new__(cls, t_ref, type_refs):
         name = f"List<{t_ref}>"
         return super(AikenListType, cls).__new__(cls, name, t_ref)
+
 class AikenPairType(namedtuple('AikenPairType', ['name', 'fst', 'snd'])):
     __slots__ = ()
     def __new__(cls, fst, snd):
         name = f"Pair<{fst.name}, {snd.name}>"
         return super(AikenPairType, cls).__new__(cls, name, fst, snd)
+
 class AikenTupleType(namedtuple('AikenTupleType', ['name', 'fields'])):
     __slots__ = ()
     def __new__(cls, fields):
@@ -47,16 +53,65 @@ class AikenTupleType(namedtuple('AikenTupleType', ['name', 'fields'])):
 
 # User defined types:
 AikenFieldType = namedtuple('AikenFieldType', ['name', 'type'])
-AikenEnumConstructorType = namedtuple('AikenEnumConstructorType', ['name', 'index', 'fields'])
-AikenEnumType = namedtuple('AikenEnumType', ['name', 'constructors'])
 
-## For most types beside `Enum` can map Python to Aiken types directly.
+class AikenEnumConstructorType(namedtuple('AikenEnumConstructorType', ['name', 'index', 'fields'])):
+    pass
+
+class AikenEnumType(namedtuple('AikenEnumType', ['name', 'constructors'])):
+    pass
+
+# Most Aiken values can be derived directly through casting
+# from Python values.
+# Please note that in pyken we know the type of the value
+# into which we want to cast during the contraction
+# of the `AikenTerm` (so for example we know
+# that a given tuple should be interpreted as an `AikenTupleType`
+# and not as an `AikenPairType`).
+# The only exception is the `AikenEnumValue` which is a bit
+# more complex and has to be handled separately.
+
 AikenEnumValue = namedtuple('AikenEnumValue', ['index', 'fields'])
 AikenPairValue = namedtuple('AikenPairValue', ['fst', 'snd'])
+
+def gen_random_value(aiken_type, type_refs):
+    if aiken_type == AikenBoolType:
+        return random.choice([True, False])
+    elif aiken_type == AikenByteArrayType:
+        length = random.randint(0, 32)
+        return bytes(random.randint(0, 255) for _ in range(length))
+    elif aiken_type == AikenIntType:
+        return random.randint(-1000000, 1000000)
+    elif aiken_type == AikenStringType:
+        length = random.randint(0, 32)
+        return ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+    elif isinstance(aiken_type, AikenListType):
+        length = random.randint(0, 5)
+        return [gen_random_value(type_refs[aiken_type.a], type_refs) for _ in range(length)]
+    elif isinstance(aiken_type, AikenTupleType):
+        return tuple(gen_random_value(type_refs[t], type_refs) for t in aiken_type.fields)
+    elif isinstance(aiken_type, AikenPairType):
+        fst = gen_random_value(type_refs[aiken_type.fst], type_refs)
+        snd = gen_random_value(type_refs[aiken_type.snd], type_refs)
+        return AikenPairValue(fst, snd)
+    elif isinstance(aiken_type, AikenEnumType):
+        constructor = random.choice(aiken_type.constructors)
+        if len(constructor.fields) == 0:
+            return AikenEnumValue(constructor.index, [])
+        field_values = []
+        for field_type_ref in constructor.fields:
+            field_type = type_refs[field_type_ref]
+            field_values.append(gen_random_value(field_type, type_refs))
+        return AikenEnumValue(constructor.index, field_values)
+    raise ValueError(f"Unknown type: {aiken_type}")
 
 class AikenTerm(namedtuple('AikenTerm', ['value', 'type', 'type_refs'])):
     @staticmethod
     def from_typed_value(python_value, aiken_type, type_refs):
+        if isinstance(python_value, AikenTerm):
+            if python_value.type == aiken_type:
+                return python_value
+            else:
+                raise ValueError(f"Expecting a value of type {aiken_type}, got {python_value}")
         if aiken_type == AikenBoolType:
             assert type(python_value) == bool, f"Expecting a boolean value: {python_value}"
             return AikenTerm(python_value, aiken_type, type_refs)
@@ -86,8 +141,6 @@ class AikenTerm(namedtuple('AikenTerm', ['value', 'type', 'type_refs'])):
             return AikenTerm(AikenPairValue(fst, snd), aiken_type, type_refs)
         elif isinstance(aiken_type, AikenEnumType):
             assert isinstance(python_value, AikenEnumValue), f"Expecting an enum value: {python_value}, {python_value.__class__}"
-            print(python_value)
-            print(python_value.fields)
             constructor_type = aiken_type.constructors[python_value.index]
             fields = [AikenTerm.from_typed_value(v, type_refs[t_ref], type_refs) for v, t_ref in zip(python_value.fields, constructor_type.fields)]
             return AikenTerm(AikenEnumValue(python_value.index, fields), aiken_type, type_refs)
@@ -121,17 +174,24 @@ class AikenTerm(namedtuple('AikenTerm', ['value', 'type', 'type_refs'])):
             return uplc.ast.PlutusConstr(self.value.index, fields)
         raise ValueError(f"Unknown type: {self.type}")
 
+    # This transformation should be driven by the type.
+    # In the case of simple values we should output JSON directly.
+    # In he case of byte strings we should output hex.
+    # def to_json(self):
+
     def __repr__(self):
         return f"AikenTerm({self.value} :: {self.type})"
 
-# This pass creates types with references
-TypeReference = namedtuple('TypeReference', ['name'])
+# At the type level we don't resolve references to the other
+# types because types can be mutually or even self recursive.
+# We will resolve them at the term level as we can assume
+# that the value is already well-formed.
 def parse_type_reference(reference_str, valid_refs):
     if not reference_str.startswith("#/definitions/"):
         raise ValueError(f"Unknown reference: {reference_str}")
     def_reference = reference_str[len("#/definitions/"):].replace("~1", "/")
     if def_reference not in valid_refs:
-        raise ValueError(f"Unknown reference: {reference_str}, {ref}")
+        raise ValueError(f"Unknown reference: {reference_str}, {def_reference}, {valid_refs}")
     return def_reference
 
 def parse_constructor(constructor, index, valid_refs):
@@ -140,27 +200,25 @@ def parse_constructor(constructor, index, valid_refs):
     return AikenEnumConstructorType(title, index, fields)
 
 def parse_definition(ref, definition, valid_refs):
-    # It seems that we have mandatory `title` and the other pieces allow us to 
-    # distinguish between different types of definitions.
-    title = definition.get('title', ref)
     if 'dataType' in definition:
         if definition['dataType'] == 'integer':
             return AikenIntType
         elif definition['dataType'] == 'bytes':
             return AikenByteArrayType
         elif definition['dataType'] == 'list':
-            # Now it is funny part - if a list contains only a single item element then it is really a list type.
+            # If a list contains only a single item element then it is really a list type.
             # Otherwise it is a tuple type.
             if len(definition['items']) == 1:
                 ref_str = definition['items']['$ref']
                 return AikenListType(parse_type_reference(ref_str, valid_refs))
             else:
                 references = [parse_type_reference(item['$ref'], valid_refs) for item in definition['items']]
-                return AikenTupleType(references)
+                return AikenTupleType(references, valid_refs)
         elif definition['dataType'] == '#string':
             return AikenStringType
     elif 'anyOf' in definition:
-        if (definition['title'] == 'Bool'
+        title = definition.get('title', ref)
+        if (title == 'Bool'
             and [c['title'] for c in definition['anyOf']] == ['False', 'True']
             and [len(c['fields']) for c in definition['anyOf']] == [0, 0]):
             return AikenBoolType
@@ -168,143 +226,12 @@ def parse_definition(ref, definition, valid_refs):
         return AikenEnumType(title, constructors)
     raise ValueError(f"Unknown definition: {definition}")
 
-### Given the above set of helpers we want to parse definitions sections from a JSON like that:
-test_blueprint = (
-    {
-      "name": "cheque.accept_cheques",
-      "parameters": [
-        {
-          "title": "cheques",
-          "schema": {
-            "$ref": "#/definitions/List$cheque~1Cheque"
-          }
-        }
-      ],
-      "compiledCode": "5837010100323232253330023370e664600200244a66600a00229000099b8048008cc008008c018004dd6000a40002940528ab9a5573eae881",
-      "hash": "9f7a498b186048b088d21bb6b1b7875e67fe7939ab7cdcb26a95acea",
-      "definitions": {
-        "Amount": {
-          "title": "Amount",
-          "dataType": "integer"
-        },
-        "Bytes32": {
-          "title": "Bytes32",
-          "dataType": "bytes"
-        },
-        "Htlc": {
-          "title": "Htlc",
-          "dataType": "list",
-          "items": [
-            {
-              "$ref": "#/definitions/Index"
-            },
-            {
-              "$ref": "#/definitions/Amount"
-            },
-            {
-              "$ref": "#/definitions/Timeout"
-            },
-            {
-              "$ref": "#/definitions/cheque~1HashLock"
-            }
-          ]
-        },
-        "Index": {
-          "title": "Index",
-          "dataType": "integer"
-        },
-        "List$cheque/Cheque": {
-          "dataType": "list",
-          "items": {
-            "$ref": "#/definitions/cheque~1Cheque"
-          }
-        },
-        "Normal": {
-          "title": "Normal",
-          "dataType": "list",
-          "items": [
-            {
-              "$ref": "#/definitions/Index"
-            },
-            {
-              "$ref": "#/definitions/Amount"
-            }
-          ]
-        },
-        "Timeout": {
-          "title": "Timeout",
-          "dataType": "integer"
-        },
-        "cheque/Cheque": {
-          "title": "Cheque",
-          "anyOf": [
-            {
-              "title": "NormalCheque",
-              "dataType": "constructor",
-              "index": 0,
-              "fields": [
-                {
-                  "$ref": "#/definitions/Normal"
-                }
-              ]
-            },
-            {
-              "title": "HtlcCheque",
-              "dataType": "constructor",
-              "index": 1,
-              "fields": [
-                {
-                  "$ref": "#/definitions/Htlc"
-                }
-              ]
-            }
-          ]
-        },
-        "cheque/HashLock": {
-          "title": "HashLock",
-          "anyOf": [
-            {
-              "title": "Blake2b256Lock",
-              "dataType": "constructor",
-              "index": 0,
-              "fields": [
-                {
-                  "$ref": "#/definitions/Bytes32"
-                }
-              ]
-            },
-            {
-              "title": "Sha2256Lock",
-              "dataType": "constructor",
-              "index": 1,
-              "fields": [
-                {
-                  "$ref": "#/definitions/Bytes32"
-                }
-              ]
-            },
-            {
-              "title": "Sha3256Lock",
-              "dataType": "constructor",
-              "index": 2,
-              "fields": [
-                {
-                  "$ref": "#/definitions/Bytes32"
-                }
-              ]
-            }
-          ]
-        }
-      }
-    }
-)
-
 class BlueprintJSON(namedtuple('BlueprintJSON', ['name', 'parameters', 'definitions', 'compiled_code', 'hash'])):
     __slots__ = ()
 
-    def __new__(cls, module_name, function_name, aiken_project_directory=None):
+    def __new__(cls, module_name, function_name, aiken_project_directory=None, debug=True):
         project_directory = f"{aiken_project_directory}" if aiken_project_directory else ""
-        blueprint_json = json.loads(run_command(f"aiken export --module {module_name} --name {function_name} {project_directory}"))
+        blueprint_json = json.loads(run_command(f"aiken export --module {module_name} --name {function_name} {project_directory}", debug=debug))
         return cls.from_json(blueprint_json)
 
     @staticmethod
@@ -317,20 +244,15 @@ class BlueprintJSON(namedtuple('BlueprintJSON', ['name', 'parameters', 'definiti
     @classmethod
     def from_json(cls, blueprint_json):
         definitions = blueprint_json['definitions']
-        type_refs = set(definitions.keys())
+        valid_refs = set(definitions.keys())
         name = blueprint_json['name']
-        parameters = [BlueprintJSON._parse_parameter(parameter, type_refs) for parameter in blueprint_json['parameters']]
-        type_refs = {ref: parse_definition(ref, definition, type_refs) for ref, definition in definitions.items()}
+        parameters = [BlueprintJSON._parse_parameter(parameter, valid_refs) for parameter in blueprint_json['parameters']]
+        type_refs = {}
+        for ref, definition in definitions.items():
+            type_refs[ref] = parse_definition(ref, definition, valid_refs)
         compiled_code = blueprint_json['compiledCode']
         hash = blueprint_json['hash']
         return super(BlueprintJSON, cls).__new__(cls, name, parameters, type_refs, compiled_code, hash)
-
-
-# Let's try to parse:
-blueprint = BlueprintJSON.from_json(test_blueprint)
-
-for (n, d) in blueprint.definitions.items():
-    print(f"{n} = {d.name}")
 
 class Identifier(namedtuple('Identifier', ['ref', 'name'])):
     def __new__(cls, ref):
@@ -343,35 +265,68 @@ class Identifier(namedtuple('Identifier', ['ref', 'name'])):
             name = 'none'
         return super(Identifier, cls).__new__(cls, ref, name)
 
+# Beside just a constructor function which can be called directly
+# like: `hello.Entity.Person("Full Name")` we want to also expose
+# a random generator for values.
+class ConstructorFnProxy:
+    def __init__(self, constructor, random_fn):
+        self.constructor = constructor
+        self.random = staticmethod(random_fn)
+
+    def __call__(self, *args, **kwargs):
+        return self.constructor(*args, **kwargs)
+
 def make_enum_constructor_fn(enum_type, constructor, type_refs):
     # A constant
     if len(constructor.fields) == 0:
-        return AikenEnumValue(constructor.index, [])
+        value = AikenEnumValue(constructor.index, [])
+        return value
+
     def constructor_fn(*args):
         return AikenEnumValue(constructor.index, args)
+
     constructor_fn.__name__ = constructor.name
+    constructor_fn.random = lambda: gen_random_value(enum_type, type_refs)
     return constructor_fn
 
 def make_module(module_name, module_dict, type_refs):
-    # namedtuple fields have to be valid Python identifiers
     identifiers = [Identifier(ref) for ref in module_dict.keys()]
     identifiers.sort()
     Module = make_dataclass(module_name, [(i.name, Any) for i in identifiers])
     values = []
     for (ref, name) in identifiers:
-        value = module_dict[ref]
-        if isinstance(value, dict):
-            values.append(make_module(name, value, type_refs))
+        module_attr = module_dict[ref]
+        if isinstance(module_attr, dict):
+            values.append(make_module(name, module_attr, type_refs))
         else:
-            if isinstance(value, AikenEnumType):
-                TypeModule = make_dataclass(name, [(Identifier(constructor.name).name, Any) for constructor in value.constructors])
-                values.append(TypeModule(*[make_enum_constructor_fn(value, constructor, type_refs) for constructor in value.constructors]))
+            if isinstance(module_attr, AikenEnumType):
+                attrs_annotations = [(Identifier(constructor.name).name, Any) for constructor in module_attr.constructors]
+                attrs_annotations.append(('random', Any))
+                TypeModule = make_dataclass(name, attrs_annotations)
+                attrs = [make_enum_constructor_fn(module_attr, constructor, type_refs) for constructor in module_attr.constructors]
+                attrs.append(lambda module_attr=module_attr: gen_random_value(module_attr, type_refs))
+                type_module = TypeModule(*attrs)
+                values.append(type_module)
+            elif module_attr == AikenIntType:
+                values.append(int)
+            elif module_attr == AikenByteArrayType:
+                values.append(bytes)
+            elif module_attr == AikenBoolType:
+                values.append(bool)
+            elif module_attr == AikenStringType:
+                values.append(str)
+            elif isinstance(module_attr, AikenListType):
+                values.append(list)
+            elif isinstance(module_attr, AikenTupleType):
+                values.append(tuple)
+            elif isinstance(module_attr, AikenPairType):
+                values.append(AikenPairValue)
             else:
-                values.append(value)
+                raise ValueError(f"The module_attr {module_attr} has an unknown type: {type(module_attr)}")
     return Module(*values)
 
 def make_modules(type_defs):
-    # we want to create nested module structure using dynamically created namedtuples
+    # Create a nested module structure reflecting the Aiken type definitions
     top_level = {}
     for type_path_str, type_definition in type_defs.items():
         # in blueprint the path is separated by '/'
@@ -387,28 +342,42 @@ def make_modules(type_defs):
     return make_module('blueprint', top_level, type_defs)
 
 def Blueprint(module_name, function_name, aiken_project_directory=None, debug=True):
-    blueprint_json = BlueprintJSON(module_name, function_name, aiken_project_directory)
+    blueprint_json = BlueprintJSON(module_name, function_name, aiken_project_directory, debug=debug)
     top_level = make_modules(blueprint_json.definitions)
 
-    # We want to add __call__ to the module so it is really a blueprint 
+    def type_ref_to_type(type_ref, top_level):
+        type_ref_parts = type_ref.split('/')
+        curr = top_level
+        for part in type_ref_parts:
+            curr = getattr(curr, part)
+        return curr
+
+    # We want to add __call__ to the root object to FFI into
+    # the compiled Aiken function.
     def eval_aiken_fn(self, *params):
         type_refs = blueprint_json.definitions
         try:
-            terms = [AikenTerm.from_typed_value(arg, type_refs[type_ref], type_refs) for ((name, type_ref), arg) in zip(blueprint_json.parameters, params)]
+            param_terms = [AikenTerm.from_typed_value(arg, type_refs[type_ref], type_refs) for ((name, type_ref), arg) in zip(blueprint_json.parameters, params)]
         except Exception as e:
             if debug:
                 print(f"Failed to parse arguments: {params}")
                 print(f"Expected types: {blueprint_json.parameters}")
             raise e
 
-        args_str = ' '.join([f"'{p.to_uplc().dumps()}'" for p in terms])
-        response = json.loads(run_command(f"aiken uplc eval -c <(echo '{blueprint_json.compiled_code}') {args_str}"))
+        args_str = ' '.join([f"'{p.to_uplc().dumps()}'" for p in param_terms])
+        response = json.loads(run_command(f"aiken uplc eval -c <(echo '{blueprint_json.compiled_code}') {args_str}", debug=debug))
         Response = namedtuple('Response', ['result', 'cpu', 'mem'])
 
         source = f"(program 0.0.0 {response['result']})"
         program = uplc.tools.parse(source)
         result = program.term.value
         return Response(result, response['cpu'], response['mem'])
+
+    # Let's build annotations dynamically which can be attached
+    # to the function. This is useful for the IDEs to provide
+    # type hints.
+    # param_annotations = {name: type_ref_to_type(type_ref, top_level) for (name, type_ref) in blueprint_json.parameters}
+    # eval_aiken_fn.__annotations__ = param_annotations
 
     # Let's copy everything from regular module and add __call__:
     attrs = [i for i in top_level.__annotations__.items()]
@@ -420,19 +389,3 @@ def Blueprint(module_name, function_name, aiken_project_directory=None, debug=Tr
     )
     return BlueprintModule(*[getattr(top_level, i[0]) for i in attrs])
 
-# blueprint = Blueprint("cheque", "is_one")
-# print(blueprint)
-# print(blueprint(1))
-# 
-# accept_bool_json = BlueprintJSON("cheque", "accept_bool")
-# print(accept_bool_json.definitions)
-# accept_bool = Blueprint("cheque", "accept_bool")
-# print(accept_bool(False))
-# print(accept_bool(True))
-# 
-# hello_json = BlueprintJSON("hello", "greet")
-# print(hello_json.definitions)
-# 
-# blueprint = Blueprint("hello", "greet")
-# print(blueprint(blueprint.hello.Entity.Person("paluh")))
-# print(blueprint(blueprint.hello.Entity.Planet(blueprint.hello.Planet.Mercury)))

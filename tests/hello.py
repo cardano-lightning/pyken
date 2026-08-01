@@ -28,3 +28,7 @@ assert response.result == "Hello, Mercury!", f"Expected greeting from Mercury bu
 # The response contains also mem and cpu usage.
 assert response.mem > 0, f"Expected non-zero memory usage but got {response.mem}"
 assert response.cpu > 0, f"Expected non-zero CPU usage but got {response.cpu}"
+
+# print(blueprint.hello.Entity.Person.random())
+# print(blueprint.hello.Entity.Planet.random())
+print(blueprint.hello.Entity.random())

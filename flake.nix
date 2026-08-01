@@ -1,7 +1,7 @@
 {
-  description = "CL signatures experiments";
+  description = "Pyken";
   nixConfig = {
-    bash-prompt = ''\[\033[1;32m\][cl-sig:\w]\$\[\033[0m\] '';
+    bash-prompt = ''\[\033[1;32m\][pyken:\w]\$\[\033[0m\] '';
   };
 
   inputs = {
@@ -185,6 +185,7 @@
               pkgs.deno
               pkgs.nodejs
               pkgs.python311Packages.frozenlist
+              pkgs.python311Packages.ipython
               pkgs.python311
             ];
           };
